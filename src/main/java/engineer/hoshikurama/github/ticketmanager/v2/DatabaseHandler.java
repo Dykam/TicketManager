@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import org.bukkit.Bukkit;
+
 class DatabaseHandler {
 
     // Main ticket table methods
@@ -128,22 +130,85 @@ class DatabaseHandler {
         try (Connection connection = HikariCP.getConnection()) {
             Statement stmt = connection.createStatement();
 
-            if (tableDoesNotExist("TicketManagerTicketsV2", connection))
+            if (tableDoesNotExist("TicketManagerTicketsV2", connection)) {
                 stmt.execute("CREATE TABLE TicketManagerTicketsV2 (" +
-                        "ID INT NOT NULL," +
-                        "STATUS VARCHAR(10) NOT NULL," +
-                        "PRIORITY TINYINT NOT NULL," +
-                        "CREATOR VARCHAR(50) NOT NULL," +
-                        "UUID VARCHAR(36) NOT NULL," +
-                        "ASSIGNMENT VARCHAR(255) NOT NULL," +
-                        "LOCATION VARCHAR(100) NOT NULL," +
-                        "CREATIONTIME BIGINT NOT NULL," +
-                        "COMMENTS TEXT NOT NULL," +
-                        "UPDATEDBYOTHERUSER BOOLEAN NOT NULL," +
-                        "KEY STATUS (STATUS) USING BTREE," +
-                        "KEY UPDATEDBYOTHERUSER (UPDATEDBYOTHERUSER) USING BTREE," +
-                        "    PRIMARY KEY (ID)" +
-                        ");");
+                    "ID INT AUTO_INCREMENT PRIMARY KEY," +
+                    "STATUS VARCHAR(10) NOT NULL," +
+                    "PRIORITY TINYINT NOT NULL," +
+                    "CREATOR VARCHAR(50) NOT NULL," +
+                    "UUID VARCHAR(36) NOT NULL," +
+                    "ASSIGNMENT VARCHAR(255) NOT NULL," +
+                    "LOCATION VARCHAR(100) NOT NULL," +
+                    "CREATIONTIME BIGINT NOT NULL," +
+                    "COMMENTS TEXT NOT NULL," +
+                    "UPDATEDBYOTHERUSER BOOLEAN NOT NULL," +
+                    "KEY STATUS (STATUS) USING BTREE," +
+                    "KEY UPDATEDBYOTHERUSER (UPDATEDBYOTHERUSER) USING BTREE" +
+                ");");
+            }
+
+            // V 2.1
+            if (tableDoesNotExist("TicketManagerTicketsV2_Comments", connection)) {
+                stmt.execute("ALTER TABLE TicketManagerTicketsV2 RENAME COLUMN ID TO TICKET_ID");
+                
+                stmt.execute("CREATE TABLE TicketManagerTicketsV2_Comments (" +
+                    "COMMENT_ID INT AUTO_INCREMENT PRIMARY KEY," +
+                    "TICKET_ID INT NOT NULL," +
+                    "CREATOR VARCHAR(50) NOT NULL," +
+                    "UUID VARCHAR(36) NOT NULL," +
+                    "LOCATION VARCHAR(100) NOT NULL," +
+                    "CREATIONTIME BIGINT NOT NULL," +
+                    "COMMENT TEXT NOT NULL," +
+                    "FOREIGN KEY (TICKET_ID) REFERENCES TicketManagerTicketsV2(TICKET_ID)" +
+                ");");
+
+                var rs = stmt.executeQuery("SELECT TICKET_ID, LOCATION, CREATIONTIME, COMMENTS FROM TicketManagerTicketsV2");
+                
+                var insertStmt = connection.prepareStatement("INSERT INTO TicketManagerTicketsV2_Comments (TICKET_ID, CREATOR, UUID, LOCATION, CREATIONTIME, COMMENT) VALUES (?, ?, ?, ?, ?, ?)");
+                connection.setAutoCommit(false);
+
+                var batchSize = 0;
+
+                while(rs.next()) {
+                    var ticketId = rs.getInt("TICKET_ID");
+                    var comments = rs.getString("COMMENTS");
+                    var location = rs.getString("LOCATION");
+                    var creationTime = rs.getString("CREATIONTIME");
+                    for (var commentString : comments.split("/MySQLNewLine/")) {
+                        var components = commentString.split("/MySQLSep/");
+                        var user = components[0];
+                        var comment = components[1];
+                        var uuid = "00000000-0000-0000-0000-000000000000";
+
+                        var player = Bukkit.getOfflinePlayer(user);
+
+                        if (player.hasPlayedBefore()) {
+                            uuid = player.getUniqueId().toString();
+                        }
+
+
+                        insertStmt.setInt(0, ticketId);
+                        insertStmt.setString(1, user);
+                        insertStmt.setString(2, uuid);
+                        insertStmt.setString(3, location);
+                        insertStmt.setString(4, creationTime);
+                        insertStmt.setString(5, comment);
+                    }
+
+                    insertStmt.addBatch();
+
+                    if (++batchSize > 1000) {
+                        insertStmt.executeBatch();
+                        batchSize = 0;
+                    }
+                }
+
+                insertStmt.executeBatch();
+
+                connection.commit();
+
+                stmt.execute("ALTER TABLE TicketManagerTicketsV2 DROP COMMENTS");
+            }
         }
     }
 
